@@ -50,9 +50,8 @@ module lcd_controller(
     assign LCD_RW   = init_done ? lcd_rw_reg   : init_rw;
     assign LCD_EN   = init_done ? lcd_e_reg    : init_e;
 
-    //----------------------------------------------------
+    
     // Texto da operação
-    //----------------------------------------------------
 
     reg [7:0] op0;
     reg [7:0] op1;
@@ -98,9 +97,9 @@ module lcd_controller(
 
     end
 
-    //----------------------------------------------------
+    
     // Conversão decimal
-    //----------------------------------------------------
+    
 
     reg sign;
     reg [15:0] abs_result;
@@ -130,9 +129,7 @@ module lcd_controller(
 
     end
 
-    //----------------------------------------------------
     // FSM
-    //----------------------------------------------------
 
     parameter S_IDLE      = 0;
     parameter S_LINE1     = 1;

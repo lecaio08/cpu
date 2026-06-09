@@ -127,37 +127,39 @@ module lcd_controller(
                 clk_div <= clk_div + 1;
 
             case(state)
-                S_IDLE: begin
+S_IDLE: begin
                     lcd_e_reg <= 0;
                     if(init_done && start_write) begin
-                        // Captura e congela os sinais vindos da CPU para evitar ruído
+                        // Captura e congela os sinais vindos da CPU para evitar flutuações de switches
                         opcode_reg <= opcode;
                         dst_reg_internal <= dst_reg;
 
-                        // Inicializa ambas as linhas com caracteres vazios
+                        // Limpa as memórias do display com espaços vazios
                         for(i=0; i<16; i=i+1) begin
                             line1[i] <= " ";
                             line2[i] <= " ";
                         end
+                        
                         state <= S_SETUP1;
                     end
                 end
 
                 S_SETUP1: begin
-                    // Monta as linhas usando os valores congelados no IDLE
+                    // 1. Monta rigidamente a escrita das operações (3 ou 4 letras)
                     case(opcode_reg)
-                        3'b000: begin line1[0] <= "L"; line1[1] <= "O"; line1[2] <= "A"; line1[3] <= "D"; end
-                        3'b001: begin line1[0] <= "A"; line1[1] <= "D"; line1[2] <= "D"; end
-                        3'b010: begin line1[0] <= "A"; line1[1] <= "D"; line1[2] <= "I"; line1[3] <= "I"; end
-                        3'b011: begin line1[0] <= "S"; line1[1] <= "U"; line1[2] <= "B"; end
-                        3'b100: begin line1[0] <= "S"; line1[1] <= "B"; line1[2] <= "I"; end
-                        3'b101: begin line1[0] <= "M"; line1[1] <= "U"; line1[2] <= "L"; end
-                        3'b110: begin line1[0] <= "C"; line1[1] <= "L"; line1[2] <= "R"; end
-                        3'b111: begin line1[0] <= "D"; line1[1] <= "P"; line1[2] <= "L"; end
-                        default: begin line1[0] <= " "; line1[1] <= " "; line1[2] <= " "; end
+                        3'b000: begin line1[0]<="L"; line1[1]<="O"; line1[2]<="A"; line1[3]<="D"; end // LOAD 
+                        3'b001: begin line1[0]<="A"; line1[1]<="D"; line1[2]<="D"; end                 // ADD 
+                        3'b010: begin line1[0]<="A"; line1[1]<="D"; line1[2]<="D"; line1[3]<="I"; end // ADDI 
+                        3'b011: begin line1[0]<="S"; line1[1]<="U"; line1[2]<="B"; end                 // SUB 
+                        3'b100: begin line1[0]<="S"; line1[1]<="B"; line1[2]<="I"; end                 // SUBI 
+                        3'b101: begin line1[0]<="M"; line1[1]<="U"; line1[2]<="L"; end                 // MUL 
+                        3'b110: begin line1[0]<="C"; line1[1]<="L"; line1[2]<="R"; end                 // CLEAR 
+                        3'b111: begin line1[0]<="D"; line1[1]<="P"; line1[2]<="L"; end                 // DISPLAY -> DPL 
+                        default: begin line1[0]<=" "; line1[1]<=" "; line1[2]<=" "; end
                     endcase
 
-                    if (opcode_reg != 3'b110) begin
+                    // 2. Formata o registrador e os números rigidamente empurrados para as últimas colunas (10 a 15)
+                    if (opcode_reg != 3'b110) begin // Se não for CLEAR [cite: 130]
                         line1[10] <= "[";
                         line1[11] <= dst_reg_internal[3] ? "1" : "0"; 
                         line1[12] <= dst_reg_internal[2] ? "1" : "0"; 
@@ -174,9 +176,10 @@ module lcd_controller(
                     end
 
                     index <= 0;
+                    // IMPORTANTE: Damos um pequeno atraso de ticks para a FPGA estabilizar os caracteres nas ram's do LCD
                     state <= S_LINE1;
                 end
-
+                
                 S_LINE1: begin
                     if (lcd_clk_tick) begin
                         lcd_rs_reg <= 0;

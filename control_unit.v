@@ -1,16 +1,16 @@
 module control_unit (
     input [17:0] sw,           // Os 18 switches da placa DE2-115
-    output reg [2:0] opcode,   // Opcode de 3 bits enviado para a ALU e LCD
-    output reg [3:0] dst_reg,  // Registrador de Destino (4 bits)
-    output reg [3:0] src1,     // Registrador Fonte 1
-    output reg [3:0] src2,     // Registrador Fonte 2
-    output reg signed [15:0] immediate, // Valor imediato corrigido com extensão de sinal
+    output reg [2:0] opcode,   // Opcode de 3 bits UNIFICADO em sw[17:15]
+    output reg [3:0] dst_reg,  // Registrador de Destino (Reg 1) -> sw[14:11]
+    output reg [3:0] src1,     // Registrador Fonte 1 (Reg 2)    -> sw[10:7]
+    output reg [3:0] src2,     // Registrador Fonte 2 (Reg 3)    -> sw[6:3]
+    output reg signed [15:0] immediate, // Valor imediato com extensão de sinal segura
     output reg we,             // Write Enable para a memória
     output reg clear_reg       // Sinal especial para a instrução CLEAR
 );
 
     always @(*) begin
-        // Valores padrão (Default) para evitar a criação de Latches indesejados
+        // Valores padrão (Default) para evitar a criação de Latches no Quartus
         opcode    = 3'b000;
         dst_reg   = 4'd0;
         src1      = 4'd0;
@@ -19,62 +19,67 @@ module control_unit (
         we        = 1'b0;
         clear_reg = 1'b0;
 
-        // ====================================================================
-        // 1. TIPO 2: Operações com Imediatos (ADDI=010, SUBI=100, MUL=101)
-        // Mapeamento exato: [17:15] Opcode, [14:11] Dest, [10:7] Src1, [6] Sinal, [5:0] Imm
-        // ====================================================================
-        if (sw[17:15] == 3'b010 || sw[17:15] == 3'b100 || sw[17:15] == 3'b101) begin
-            opcode  = sw[17:15];
-            dst_reg = sw[14:11];
-            src1    = sw[10:7];
-            we      = 1'b1;
-            
-            // Extensão de sinal segura usando casting $signed para evitar erros de zero-extend
-            if (sw[6] == 1'b1) 
-                immediate = - $signed({10'd0, sw[5:0]});
-            else 
-                immediate = $signed({10'd0, sw[5:0]});
-        end
+        // O Opcode é extraído ESTRITAMENTE de uma única parte fixa
+        opcode = sw[17:15];
 
-        // ====================================================================
-        // 2. TIPO 1: Operações Reg x Reg (ADD=001, SUB=011)
-        // Mapeamento: [14:12] Opcode, [11:8] Dest, [7:4] Src1, [3:0] Src2
-        // ====================================================================
-        else if (sw[14:12] == 3'b001 || sw[14:12] == 3'b011) begin
-            opcode  = sw[14:12];
-            dst_reg = sw[11:8];
-            src1    = sw[7:4];
-            src2    = sw[3:0];
-            we      = 1'b1;
-        end
+        case (opcode)
+            // ================================================================
+            // TIPO 3: Operação de Carga (LOAD = 000)
+            // ================================================================
+            3'b000: begin
+                dst_reg = sw[14:11]; // Mantém o alinhamento padrão do Reg 1
+                we      = 1'b1;
+                
+                // Extensão de sinal do imediato de 6 bits (sw[5:0]) com base no sinal (sw[6])
+                if (sw[6] == 1'b1) 
+                    immediate = - $signed({10'd0, sw[5:0]});
+                else 
+                    immediate = $signed({10'd0, sw[5:0]});
+            end
 
-        // ====================================================================
-        // 3. TIPO ESPECIAL: Controle (CLEAR=110, DISPLAY=111)
-        // Mapeamento corrigido para 3 bits [7:5] para evitar conflito de tamanho
-        // ====================================================================
-        else if (sw[7:5] == 3'b110 || sw[7:5] == 3'b111) begin
-            opcode = sw[7:5];
-            if (opcode == 3'b111) begin // DISPLAY
-                src1    = sw[3:0];
-                dst_reg = sw[3:0]; // Passamos para o LCD saber qual o registrador ativo entre []
-            end else begin              // CLEAR
+            // ================================================================
+            // TIPO 1: Operações entre Registradores (ADD = 001, SUB = 011)
+            // ================================================================
+            3'b001, 
+            3'b011: begin
+                dst_reg = sw[14:11]; // Reg 1
+                src1    = sw[10:7];  // Reg 2
+                src2    = sw[6:3];   // Reg 3
+                we      = 1'b1;
+            end
+
+            // ================================================================
+            // TIPO 2: Operações com Imediatos (ADDI = 010, SUBI = 100, MUL = 101)
+            // ================================================================
+            3'b010, 
+            3'b100, 
+            3'b101: begin
+                dst_reg = sw[14:11]; // Reg 1
+                src1    = sw[10:7];  // Reg 2
+                we      = 1'b1;
+                
+                // Extensão de sinal do imediato de 6 bits (sw[5:0]) com base no sinal (sw[6])
+                if (sw[6] == 1'b1) 
+                    immediate = - $signed({10'd0, sw[5:0]});
+                else 
+                    immediate = $signed({10'd0, sw[5:0]});
+            end
+
+            // ================================================================
+            // TIPO ESPECIAL: Controle e Exibição (CLEAR = 110, DISPLAY = 111)
+            // ================================================================
+            3'b110: begin // CLEAR
                 clear_reg = 1'b1;
             end
-        end
 
-        // ====================================================================
-        // 4. TIPO 3: Operação de Carga (LOAD=000)
-        // Mapeamento: [13:11] Opcode, [10:7] Dest, [6] Sinal, [5:0] Imediato
-        // ====================================================================
-        else if (sw[13:11] == 3'b000) begin
-            opcode  = 3'b000;
-            dst_reg = sw[10:7];
-            we      = 1'b1;
-            
-            if (sw[6] == 1'b1)
-                immediate = - $signed({10'd0, sw[5:0]});
-            else
-                immediate = $signed({10'd0, sw[5:0]});
-        end
+            3'b111: begin // DISPLAY
+                src1    = sw[14:11]; // Lês o registrador a exibir a partir do campo padrão Reg 1
+                dst_reg = sw[14:11]; // Passas também para o LCD identificar o alvo
+            end
+
+            default: begin
+                // Estado seguro (instrução inválida ou não implementada)
+            end
+        endcase
     end
 endmodule

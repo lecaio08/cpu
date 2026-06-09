@@ -86,22 +86,28 @@ module lcd_controller(
         d0 = abs_result % 10;
     end
 
-    // Máquina de Estados do LCD com divisor de tempo para o Enable (LCD_EN)
+   // Máquina de Estados do LCD Atualizada
     parameter S_IDLE   = 0;
     parameter S_LINE1  = 1;
-    parameter S_WRITE1 = 2;
-    parameter S_LINE2  = 3;
-    parameter S_WRITE2 = 4;
-    parameter S_DONE   = 5;
+    parameter S_SETUP1 = 2; // Estado de preparação para a Linha 1
+    parameter S_WRITE1 = 3;
+    parameter S_LINE2  = 4;
+    parameter S_SETUP2 = 5; // Estado de preparação para a Linha 2
+    parameter S_WRITE2 = 6;
+    parameter S_DONE   = 7;
 
     reg [2:0] state;
-    reg [3:0] index; // Reduzido para 4 bits (0 a 15 basta)
+    reg [3:0] index; 
     reg [7:0] line1 [0:15];
     reg [7:0] line2 [0:15];
     
-    // Divisor de clock interno para o LCD (O HD44780 não aguenta 50MHz direto no pino Enable)
+    // Registos internos para congelar os valores da CPU
+    reg [2:0] opcode_reg;
+    reg [3:0] dst_reg_internal;
+
+    // Divisor de clock interno para o LCD (50MHz -> ~1ms)
     reg [15:0] clk_div;
-    wire lcd_clk_tick = (clk_div == 16'd50000); // Gera um pulso a cada ~1ms (fácil de ler pelo LCD)
+    wire lcd_clk_tick = (clk_div == 16'd50000);
 
     integer i;
 
@@ -111,6 +117,8 @@ module lcd_controller(
             index <= 0;
             clk_div <= 0;
             lcd_e_reg <= 0;
+            opcode_reg <= 0;
+            dst_reg_internal <= 0;
         end else begin
             // Contador do divisor de clock
             if (clk_div >= 16'd50000)
@@ -119,77 +127,62 @@ module lcd_controller(
                 clk_div <= clk_div + 1;
 
             case(state)
-               S_IDLE: begin
+                S_IDLE: begin
                     lcd_e_reg <= 0;
                     if(init_done && start_write) begin
-                        // 1. Inicializa ambas as linhas com caracteres de espaço vazio (" ")
+                        // Captura e congela os sinais vindos da CPU para evitar ruído
+                        opcode_reg <= opcode;
+                        dst_reg_internal <= dst_reg;
+
+                        // Inicializa ambas as linhas com caracteres vazios
                         for(i=0; i<16; i=i+1) begin
                             line1[i] <= " ";
                             line2[i] <= " ";
                         end
-
-                        // 2. Definição do Nome da Operação e escrita no início da Linha 1
-                        case(opcode)
-                            3'b000: begin 
-                                line1[0] <= "L"; line1[1] <= "O"; line1[2] <= "A"; line1[3] <= "D"; 
-                            end // LOAD (4 letras)
-                            3'b001: begin 
-                                line1[0] <= "A"; line1[1] <= "D"; line1[2] <= "D"; 
-                            end // ADD (3 letras)
-                            3'b010: begin 
-                                line1[0] <= "A"; line1[1] <= "D"; line1[2] <= "I"; line1[3] <= "I"; 
-                            end // ADDI (4 letras)
-                            3'b011: begin 
-                                line1[0] <= "S"; line1[1] <= "U"; line1[2] <= "B"; 
-                            end // SUB (3 letras)
-                            3'b100: begin 
-                                line1[0] <= "S"; line1[1] <= "B"; line1[2] <= "I"; 
-                            end // SUBI (3 letras - de acordo com a tabela do PDF)
-                            3'b101: begin 
-                                line1[0] <= "M"; line1[1] <= "U"; line1[2] <= "L"; 
-                            end // MUL (3 letras)
-                            3'b110: begin 
-                                line1[0] <= "C"; line1[1] <= "L"; line1[2] <= "R"; 
-                            end // CLEAR (3 letras)
-                            3'b111: begin 
-                                line1[0] <= "D"; line1[1] <= "P"; line1[2] <= "L"; 
-                            end // DISPLAY -> "DPL" (3 letras)
-                            default: begin 
-                                line1[0] <= " "; line1[1] <= " "; line1[2] <= " "; 
-                            end
-                        endcase
-
-                        // 3. Se NÃO for a instrução CLEAR, formata o Registrador de Destino totalmente à direita
-                        // Alinhado rigidamente nas posições 10 a 15 da Linha 1: [ B B B B ]
-                        if (opcode != 3'b110) begin
-                            line1[10] <= "[";
-                            line1[11] <= dst_reg[3] ? "1" : "0"; 
-                            line1[12] <= dst_reg[2] ? "1" : "0"; 
-                            line1[13] <= dst_reg[1] ? "1" : "0"; 
-                            line1[14] <= dst_reg[0] ? "1" : "0"; 
-                            line1[15] <= "]";
-                        end
-
-                        // 4. Se NÃO for a instrução CLEAR, formata o valor com sinal totalmente à direita
-                        // Alinhado rigidamente nas posições 10 a 15 da Linha 2: S D D D D D
-                        if (opcode != 3'b110) begin
-                            line2[10] <= sign ? "-" : "+";
-                            line2[11] <= d4 + 8'd48;
-                            line2[12] <= d3 + 8'd48;
-                            line2[13] <= d2 + 8'd48;
-                            line2[14] <= d1 + 8'd48;
-                            line2[15] <= d0 + 8'd48;
-                        end
-
-                        state <= S_LINE1;
+                        state <= S_SETUP1;
                     end
                 end
+
+                S_SETUP1: begin
+                    // Monta as linhas usando os valores congelados no IDLE
+                    case(opcode_reg)
+                        3'b000: begin line1[0] <= "L"; line1[1] <= "O"; line1[2] <= "A"; line1[3] <= "D"; end
+                        3'b001: begin line1[0] <= "A"; line1[1] <= "D"; line1[2] <= "D"; end
+                        3'b010: begin line1[0] <= "A"; line1[1] <= "D"; line1[2] <= "I"; line1[3] <= "I"; end
+                        3'b011: begin line1[0] <= "S"; line1[1] <= "U"; line1[2] <= "B"; end
+                        3'b100: begin line1[0] <= "S"; line1[1] <= "B"; line1[2] <= "I"; end
+                        3'b101: begin line1[0] <= "M"; line1[1] <= "U"; line1[2] <= "L"; end
+                        3'b110: begin line1[0] <= "C"; line1[1] <= "L"; line1[2] <= "R"; end
+                        3'b111: begin line1[0] <= "D"; line1[1] <= "P"; line1[2] <= "L"; end
+                        default: begin line1[0] <= " "; line1[1] <= " "; line1[2] <= " "; end
+                    endcase
+
+                    if (opcode_reg != 3'b110) begin
+                        line1[10] <= "[";
+                        line1[11] <= dst_reg_internal[3] ? "1" : "0"; 
+                        line1[12] <= dst_reg_internal[2] ? "1" : "0"; 
+                        line1[13] <= dst_reg_internal[1] ? "1" : "0"; 
+                        line1[14] <= dst_reg_internal[0] ? "1" : "0"; 
+                        line1[15] <= "]";
+
+                        line2[10] <= sign ? "-" : "+";
+                        line2[11] <= d4 + 8'd48;
+                        line2[12] <= d3 + 8'd48;
+                        line2[13] <= d2 + 8'd48;
+                        line2[14] <= d1 + 8'd48;
+                        line2[15] <= d0 + 8'd48;
+                    end
+
+                    index <= 0;
+                    state <= S_LINE1;
+                end
+
                 S_LINE1: begin
                     if (lcd_clk_tick) begin
                         lcd_rs_reg <= 0;
                         lcd_rw_reg <= 0;
-                        lcd_data_reg <= 8'h80; // Comando: Forçar cursor no início da Linha 1
-                        lcd_e_reg <= 1;        // Dá o pulso de escrita
+                        lcd_data_reg <= 8'h80; // Comando: Cursor no início da Linha 1
+                        lcd_e_reg <= 1;        // Ativa o Enable
                         index <= 0;
                         state <= S_WRITE1;
                     end
@@ -198,17 +191,18 @@ module lcd_controller(
                 S_WRITE1: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin
-                            lcd_e_reg <= 0; // Desliga o pulso (borda de descida grava o dado no LCD)
+                            lcd_e_reg <= 0; // Desliga o Enable (grava o dado no LCD)
                             if(index == 4'd15) begin
                                 state <= S_LINE2;
                             end else begin
                                 index <= index + 1;
                             end
                         end else begin
-                            lcd_rs_reg <= 1; // Modo Dado
+                            // Primeiro coloca o Dado no barramento, e só depois liga o Enable
+                            lcd_rs_reg <= 1; 
                             lcd_rw_reg <= 0;
                             lcd_data_reg <= line1[index];
-                            lcd_e_reg <= 1;  // Liga o pulso para o próximo caractere
+                            lcd_e_reg <= 1;  
                         end
                     end
                 end
@@ -217,7 +211,7 @@ module lcd_controller(
                     if (lcd_clk_tick) begin
                         lcd_rs_reg <= 0;
                         lcd_rw_reg <= 0;
-                        lcd_data_reg <= 8'hC0; // Comando: Forçar cursor no início da Linha 2
+                        lcd_data_reg <= 8'hC0; // Comando: Cursor no início da Linha 2
                         lcd_e_reg <= 1;
                         index <= 0;
                         state <= S_WRITE2;
@@ -227,13 +221,14 @@ module lcd_controller(
                 S_WRITE2: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin
-                            lcd_e_reg <= 0;
+                            lcd_e_reg <= 0; // Desliga o Enable
                             if(index == 4'd15) begin
                                 state <= S_DONE;
                             end else begin
                                 index <= index + 1;
                             end
                         end else begin
+                            // Primeiro coloca o Dado no barramento, e só depois liga o Enable
                             lcd_rs_reg <= 1;
                             lcd_rw_reg <= 0;
                             lcd_data_reg <= line2[index];
@@ -243,8 +238,6 @@ module lcd_controller(
                 end
 
                 S_DONE: begin
-                    // Altera de: state <= S_DONE (que travava) para retornar ao IDLE
-                    // permitindo novas atualizações quando houver outro comando
                     state <= S_IDLE; 
                 end
                 

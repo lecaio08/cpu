@@ -19,8 +19,6 @@ module debounce (
 	// estado atual e contador
 	reg [1:0]  state = init;
 	reg [32:0] counter = 0;
-	reg [1:0]  state;
-	reg [32:0] counter;
 	// parte combinacional
 	always @(*) begin
 		case (state)

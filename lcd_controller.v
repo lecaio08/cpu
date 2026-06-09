@@ -182,15 +182,18 @@ S_IDLE: begin
                 
                 S_LINE1: begin
                     if (lcd_clk_tick) begin
-                        lcd_rs_reg <= 0;
-                        lcd_rw_reg <= 0;
-                        lcd_data_reg <= 8'h80; // Comando: Cursor no início da Linha 1
-                        lcd_e_reg <= 1;        // Ativa o Enable
-                        index <= 0;
-                        state <= S_WRITE1;
+                        if (lcd_e_reg == 1'b1) begin
+                            lcd_e_reg <= 0;    // Desliga o pulso do comando
+                            index <= 0;        // Garante que começa no 0
+                            state <= S_WRITE1; // Só agora avança para escrever a palavra
+                        end else begin
+                            lcd_rs_reg <= 0;
+                            lcd_rw_reg <= 0;
+                            lcd_data_reg <= 8'h80; // Comando: Cursor no início da Linha 1
+                            lcd_e_reg <= 1;        // Ativa o pulso
+                        end
                     end
                 end
-
                 S_WRITE1: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin
@@ -209,18 +212,20 @@ S_IDLE: begin
                         end
                     end
                 end
-
-                S_LINE2: begin
+                    S_LINE2: begin
                     if (lcd_clk_tick) begin
-                        lcd_rs_reg <= 0;
-                        lcd_rw_reg <= 0;
-                        lcd_data_reg <= 8'hC0; // Comando: Cursor no início da Linha 2
-                        lcd_e_reg <= 1;
-                        index <= 0;
-                        state <= S_WRITE2;
+                        if (lcd_e_reg == 1'b1) begin
+                            lcd_e_reg <= 0;    // Desliga o pulso do comando
+                            index <= 0;        // Garante que começa no 0
+                            state <= S_WRITE2; // Só agora avança para escrever os números
+                        end else begin
+                            lcd_rs_reg <= 0;
+                            lcd_rw_reg <= 0;
+                            lcd_data_reg <= 8'hC0; // Comando: Cursor no início da Linha 2
+                            lcd_e_reg <= 1;        // Ativa o pulso
+                        end
                     end
                 end
-
                 S_WRITE2: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin

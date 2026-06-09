@@ -1,261 +1,276 @@
-// ---------------------------------------------------------------------------
-// Módulo: lcd_controller_top
-// Função: Controlador principal do LCD.
-//         Aguarda o módulo lcd_init_hd44780 terminar a inicialização e,
-//         em seguida, escreve uma mensagem fixa na primeira linha do LCD.
-//
-// Estilo de FSM:
-//   - Bloco 1 (sequencial): state, delay_cnt, msg_index
-//   - Bloco 2 (combinacional): next_state, next_delay_cnt, next_msg_index
-//   - Bloco 3 (combinacional): geração de saídas (Moore)
-//
-// Dependência: módulo lcd_init_hd44780 (já com sua própria FSM em 3 always).
-// ---------------------------------------------------------------------------
-module lcd_controller_top (
-    input  wire       clk,
-    input  wire       rst,
+module lcd_controller(
 
-    // Saídas para o LCD
-    output wire  [7:0] lcd_data,
-    output wire        lcd_rs,
-    output wire        lcd_rw,
-    output wire        lcd_e
+    input clk,
+    input rst,
+
+    input [2:0] opcode,
+    input [3:0] src1,
+    input [3:0] src2,
+    input [3:0] dst_reg,
+
+    input signed [15:0] result,
+
+    inout [7:0] LCD_DATA,
+    output LCD_RS,
+    output LCD_RW,
+    output LCD_EN
+
 );
 
-    // -----------------------------------------------------------------------
-    // Instância do módulo de inicialização
-    // -----------------------------------------------------------------------
+    wire init_done;
+
     wire [7:0] init_data;
-    wire       init_rs;
-    wire       init_rw;
-    wire       init_e;
-    wire       init_done;
+    wire init_rs;
+    wire init_rw;
+    wire init_e;
 
-    reg        start_init;  // gerado pelo controlador
+    reg start_init;
 
-    lcd_init_hd44780 lcd_init (
-        .clk      (clk),
-        .rst      (rst),
-        .start    (start_init),
-        .done     (init_done),
-        .lcd_data (init_data),
-        .lcd_rs   (init_rs),
-        .lcd_rw   (init_rw),
-        .lcd_e    (init_e)
+    lcd_init_hd44780 INIT(
+
+        .clk(clk),
+        .rst(rst),
+        .start(start_init),
+        .done(init_done),
+
+        .lcd_data(init_data),
+        .lcd_rs(init_rs),
+        .lcd_rw(init_rw),
+        .lcd_e(init_e)
+
     );
 
-    // -----------------------------------------------------------------------
-    // MUX: decide quem controla o LCD (init ou controlador principal)
-    // -----------------------------------------------------------------------
-    wire controller_mode = init_done;
-    assign lcd_data = (controller_mode == 0) ? init_data : wr_data;
-    assign lcd_rs   = (controller_mode == 0) ? init_rs   : wr_rs;
-    assign lcd_rw   = (controller_mode == 0) ? init_rw   : wr_rw;
-    assign lcd_e    = (controller_mode == 0) ? init_e    : wr_e;
+    reg [7:0] lcd_data_reg;
+    reg lcd_rs_reg;
+    reg lcd_rw_reg;
+    reg lcd_e_reg;
 
-    // -----------------------------------------------------------------------
-    // Mensagem a ser exibida
-    // -----------------------------------------------------------------------
-    localparam integer MSG_LEN = 16;
+    assign LCD_DATA = init_done ? lcd_data_reg : init_data;
+    assign LCD_RS   = init_done ? lcd_rs_reg   : init_rs;
+    assign LCD_RW   = init_done ? lcd_rw_reg   : init_rw;
+    assign LCD_EN   = init_done ? lcd_e_reg    : init_e;
 
-    reg [7:0] message [0:MSG_LEN-1];
+    //----------------------------------------------------
+    // Texto da operação
+    //----------------------------------------------------
+
+    reg [7:0] op0;
+    reg [7:0] op1;
+    reg [7:0] op2;
+
+    always @(*) begin
+
+        case(opcode)
+
+            3'b000: begin
+                op0="L"; op1="D"; op2=" ";
+            end
+
+            3'b001: begin
+                op0="A"; op1="D"; op2="D";
+            end
+
+            3'b010: begin
+                op0="A"; op1="D"; op2="I";
+            end
+
+            3'b011: begin
+                op0="S"; op1="U"; op2="B";
+            end
+
+            3'b100: begin
+                op0="S"; op1="B"; op2="I";
+            end
+
+            3'b101: begin
+                op0="M"; op1="U"; op2="L";
+            end
+
+            3'b110: begin
+                op0="C"; op1="L"; op2="R";
+            end
+
+            3'b111: begin
+                op0="D"; op1="S"; op2="P";
+            end
+
+        endcase
+
+    end
+
+    //----------------------------------------------------
+    // Conversão decimal
+    //----------------------------------------------------
+
+    reg sign;
+    reg [15:0] abs_result;
+
+    reg [3:0] d0;
+    reg [3:0] d1;
+    reg [3:0] d2;
+    reg [3:0] d3;
+    reg [3:0] d4;
+
+    always @(*) begin
+
+        if(result < 0) begin
+            sign = 1'b1;
+            abs_result = -result;
+        end
+        else begin
+            sign = 1'b0;
+            abs_result = result;
+        end
+
+        d4 = (abs_result / 10000) % 10;
+        d3 = (abs_result / 1000)  % 10;
+        d2 = (abs_result / 100)   % 10;
+        d1 = (abs_result / 10)    % 10;
+        d0 = abs_result % 10;
+
+    end
+
+    //----------------------------------------------------
+    // FSM
+    //----------------------------------------------------
+
+    parameter S_IDLE      = 0;
+    parameter S_LINE1     = 1;
+    parameter S_WRITE1    = 2;
+    parameter S_LINE2     = 3;
+    parameter S_WRITE2    = 4;
+    parameter S_DONE      = 5;
+
+    reg [2:0] state;
+
+    reg [5:0] index;
+
+    reg [7:0] line1 [0:15];
+    reg [7:0] line2 [0:15];
 
     integer i;
-    initial begin
-        // "HELLO WORLD!    " (16 caracteres)
-        message[0]  = "H";
-        message[1]  = "E";
-        message[2]  = "L";
-        message[3]  = "L";
-        message[4]  = "O";
-        message[5]  = " ";
-        message[6]  = "W";
-        message[7]  = "O";
-        message[8]  = "R";
-        message[9]  = "L";
-        message[10] = "D";
-        message[11] = "!";
-        message[12] = " ";
-        message[13] = " ";
-        message[14] = " ";
-        message[15] = " ";
-    end
 
-    // -----------------------------------------------------------------------
-    // Temporizações para escrita de caracteres (ajustar ao clock real)
-    // -----------------------------------------------------------------------
-    // Exemplo para 50 MHz:
-    localparam [31:0] DELAY_WRITE = 32'd2000; // ~40 us
-    localparam [31:0] DELAY_PULSE = 32'd50;   // ~1 us
-
-    // -----------------------------------------------------------------------
-    // Estados da FSM principal
-    // -----------------------------------------------------------------------
-    localparam [2:0]
-        S_WAIT_INIT  = 3'd0,
-        S_PREPARE    = 3'd1,
-        S_PULSE_E    = 3'd2,
-        S_WAIT       = 3'd3,
-        S_DONE       = 3'd4;
-
-    reg [2:0]  state, next_state;
-    reg [31:0] delay_cnt, next_delay_cnt;
-    reg [4:0]  msg_index, next_msg_index; // até 31 caracteres
-
-    // =======================================================================
-    // 1) BLOCO SEQUENCIAL: registra estado, contador e índice da mensagem
-    // =======================================================================
     always @(posedge clk or posedge rst) begin
-        if (rst) begin
-            state      <= S_WAIT_INIT;
-            delay_cnt  <= 32'd0;
-            msg_index  <= 5'd0;
-        end else begin
-            state      <= next_state;
-            delay_cnt  <= next_delay_cnt;
-            msg_index  <= next_msg_index;
+
+        if(rst) begin
+
+            state <= S_IDLE;
+            index <= 0;
+
         end
-    end
+        else begin
 
-    // =======================================================================
-    // 2) BLOCO COMBINACIONAL: cálculo do próximo estado/contador/índice
-    // =======================================================================
-    always @(*) begin
-        // valores padrão
-        next_state     = state;
-        next_delay_cnt = delay_cnt;
-        next_msg_index = msg_index;
+            case(state)
 
-        case (state)
-            // ---------------------------------------------------------------
-            // Espera a inicialização do LCD ser concluída
-            // ---------------------------------------------------------------
-            S_WAIT_INIT: begin
-                if (init_done) begin
-                    next_state     = S_PREPARE;
-                    next_msg_index = 5'd0;
-                end
-            end
+                S_IDLE:
 
-            // ---------------------------------------------------------------
-            // Prepara para escrever o caractere atual
-            // ---------------------------------------------------------------
-            S_PREPARE: begin
-                // apenas configura o próximo estado e o delay para o pulso
-                next_state     = S_PULSE_E;
-                next_delay_cnt = DELAY_PULSE;
-            end
+                    if(init_done) begin
 
-            // ---------------------------------------------------------------
-            // Gera pulso de Enable
-            // ---------------------------------------------------------------
-            S_PULSE_E: begin
-                if (delay_cnt > 0) begin
-                    next_delay_cnt = delay_cnt - 1;
-                end else begin
-                    next_state     = S_WAIT;
-                    next_delay_cnt = DELAY_WRITE;
-                end
-            end
+                        line1[0]  <= op0;
+                        line1[1]  <= op1;
+                        line1[2]  <= op2;
+                        line1[3]  <= " ";
 
-            // ---------------------------------------------------------------
-            // Espera o tempo de escrita do caractere
-            // ---------------------------------------------------------------
-            S_WAIT: begin
-                if (delay_cnt > 0) begin
-                    next_delay_cnt = delay_cnt - 1;
-                end else begin
-                    if (msg_index == (MSG_LEN-1)) begin
-                        next_state = S_DONE;
-                    end else begin
-                        next_msg_index = msg_index + 1;
-                        next_state     = S_PREPARE;
+                        line1[4]  <= "[";
+                        line1[5]  <= src1 + 8'd48;
+                        line1[6]  <= "]";
+                        line1[7]  <= "[";
+
+                        line1[8]  <= src2 + 8'd48;
+                        line1[9]  <= "]";
+
+                        for(i=10;i<16;i=i+1)
+                            line1[i] <= " ";
+
+                        line2[0] <= sign ? "-" : "+";
+
+                        line2[1] <= d4 + 8'd48;
+                        line2[2] <= d3 + 8'd48;
+                        line2[3] <= d2 + 8'd48;
+                        line2[4] <= d1 + 8'd48;
+                        line2[5] <= d0 + 8'd48;
+
+                        for(i=6;i<16;i=i+1)
+                            line2[i] <= " ";
+
+                        state <= S_LINE1;
+
                     end
+
+                S_LINE1: begin
+
+                    lcd_rs_reg <= 0;
+                    lcd_rw_reg <= 0;
+                    lcd_data_reg <= 8'h80;
+                    lcd_e_reg <= 1;
+
+                    index <= 0;
+
+                    state <= S_WRITE1;
+
                 end
-            end
 
-            // ---------------------------------------------------------------
-            // Mensagem completa
-            // ---------------------------------------------------------------
-            S_DONE: begin
-                // Permanece nesse estado até reset
-                next_state = S_DONE;
-            end
+                S_WRITE1: begin
 
-            default: begin
-                next_state     = S_WAIT_INIT;
-                next_delay_cnt = 32'd0;
-                next_msg_index = 5'd0;
-            end
-        endcase
+                    lcd_rs_reg <= 1;
+                    lcd_rw_reg <= 0;
+
+                    lcd_data_reg <= line1[index];
+
+                    lcd_e_reg <= ~lcd_e_reg;
+
+                    if(index == 15)
+                        state <= S_LINE2;
+                    else
+                        index <= index + 1;
+
+                end
+
+                S_LINE2: begin
+
+                    lcd_rs_reg <= 0;
+                    lcd_rw_reg <= 0;
+
+                    lcd_data_reg <= 8'hC0;
+
+                    lcd_e_reg <= 1;
+
+                    index <= 0;
+
+                    state <= S_WRITE2;
+
+                end
+
+                S_WRITE2: begin
+
+                    lcd_rs_reg <= 1;
+                    lcd_rw_reg <= 0;
+
+                    lcd_data_reg <= line2[index];
+
+                    lcd_e_reg <= ~lcd_e_reg;
+
+                    if(index == 15)
+                        state <= S_DONE;
+                    else
+                        index <= index + 1;
+
+                end
+
+                S_DONE: begin
+
+                    state <= S_DONE;
+
+                end
+
+            endcase
+
+        end
+
     end
-
-    // =======================================================================
-    // 3) BLOCO COMBINACIONAL: geração das saídas
-    //     - start_init
-    //     - sinais de escrita (wr_rs, wr_rw, wr_e, wr_data)
-// =======================================================================
-    reg [7:0] wr_data;
-    reg       wr_rs;
-    reg       wr_rw;
-    reg       wr_e;
 
     always @(*) begin
-        // -------------------------------------------------------------------
-        // 3.1) Controle de quem controla os sinais do LCD
-        // -------------------------------------------------------------------
-
-        // start_init: fica em '1' enquanto estamos esperando a inicialização.
-        // O módulo lcd_init só usa o nível de start para sair do IDLE.
-        start_init = (state == S_WAIT_INIT) ? 1'b1 : 1'b0;
-
-        // -------------------------------------------------------------------
-        // 3.2) Sinais de escrita do controlador principal
-        // -------------------------------------------------------------------
-        // Default
-        wr_data = 8'h00;
-        wr_rs   = 1'b0;
-        wr_rw   = 1'b0;
-        wr_e    = 1'b0;
-
-        case (state)
-            // Durante a escrita da mensagem, usamos os caracteres da array
-            S_PREPARE: begin
-                wr_data = message[msg_index];
-                wr_rs   = 1'b1; // dado (caractere)
-                wr_rw   = 1'b0; // escrita
-                wr_e    = 1'b0;
-            end
-
-            S_PULSE_E: begin
-                wr_data = message[msg_index];
-                wr_rs   = 1'b1;
-                wr_rw   = 1'b0;
-                wr_e    = 1'b1; // pulso de enable
-            end
-
-            S_WAIT: begin
-                wr_data = message[msg_index];
-                wr_rs   = 1'b1;
-                wr_rw   = 1'b0;
-                wr_e    = 1'b0;
-            end
-
-            S_DONE: begin
-                // mensagem já escrita — manter sinais em estado "neutro"
-                wr_rs = 1'b0;
-                wr_rw = 1'b0;
-                wr_e  = 1'b0;
-                // wr_data pode permanecer com o último valor ou 0
-            end
-
-            default: begin
-                // outros estados: controlador principal não mexe no LCD
-                wr_rs = 1'b0;
-                wr_rw = 1'b0;
-                wr_e  = 1'b0;
-                wr_data = 8'h00;
-            end
-        endcase
+        start_init = 1'b1;
     end
+
 endmodule

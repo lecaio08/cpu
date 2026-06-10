@@ -14,20 +14,26 @@ module control_unit (
     output reg lcd_start           // Gatilho para atualizar o LCD
 );
 
-    // Definição dos Estados da FSM
-    parameter S_IDLE    = 2'b00;
-    parameter S_EXECUTE = 2'b01;
-    parameter S_WRITE   = 2'b10;
-    parameter S_UPDATE  = 2'b11;
+    // Definição dos Estados da FSM (Aumentado para 3 bits para acomodar o S_INIT)
+    parameter S_INIT    = 3'b000;
+    parameter S_IDLE    = 3'b001;
+    parameter S_EXECUTE = 3'b010;
+    parameter S_WRITE   = 3'b011;
+    parameter S_UPDATE  = 3'b100;
 
-    reg [1:0] state;
-    reg [1:0] next_state;
+    reg [2:0] state;
+    reg [2:0] next_state;
 
     // -------------------------------------------------------------------------
     // PARTE COMBINACIONAL: Lógica estável para alteração de estados
     // -------------------------------------------------------------------------
     always @(*) begin
         case (state)
+            S_INIT: begin
+                // Executa uma única vez no boot/reset e vai direto para a espera estável
+                next_state = S_IDLE;
+            end
+
             S_IDLE: begin
                 if (instructionPulse) 
                     next_state = S_EXECUTE;
@@ -60,22 +66,29 @@ module control_unit (
     // -------------------------------------------------------------------------
     always @(posedge clk or posedge rst) begin
         if (rst) begin
-            state     <= S_IDLE;
-            opcode    <= 3'b000;
+            state     <= S_INIT; // Força entrar no estado de inicialização no reset físico
+            opcode    <= 3'b110; // Código temporário de CLEAR/Reset para o LCD ler
             dst       <= 4'd0;
             src1      <= 4'd0;
             src2      <= 4'd0;
             immediate <= 16'd0;
             we        <= 1'b0;
-            clear_reg <= 1'b1; // Memória limpa puramente sob a ativação do reset
-            lcd_start <= 1'b0;
+            clear_reg <= 1'b1;   // Ativa a limpeza da memória de forma pura
+            lcd_start <= 1'b1;   // Dispara o LCD imediatamente para renderizar os traços/zeros
         end else begin
             state <= next_state;
 
-            // Decodificação: feita estritamente na transição exata do disparo
-            if (state == S_IDLE && instructionPulse) begin
+            // Tratamento do estado de inicialização pós-reset lógico
+            if (state == S_INIT) begin
+                we        <= 1'b0;
+                clear_reg <= 1'b1; // Mantém a memória limpando
+                lcd_start <= 1'b1; // Continua sustentando o disparo inicial do LCD
+                opcode    <= 3'b110;
+            end
+            // Decodificação: feita estritamente na transição exata do disparo em IDLE
+            else if (state == S_IDLE && instructionPulse) begin
                 opcode <= instruction[17:15];
-                clear_reg <= 1'b0; // Garante desligamento total antes de operar
+                clear_reg <= 1'b0; // Desliga o sinal de limpar que veio do reset antes de operar
                 
                 case (instruction[17:15])
                     3'b000: begin // LOAD
@@ -127,7 +140,7 @@ module control_unit (
                     end
                 endcase
             end else begin
-                // Atualização Controlada das Saídas nos estados correspondentes
+                // Atualização Controlada das Saídas nos estados correspondentes (Ignora se estiver no S_INIT)
                 case (next_state)
                     S_IDLE: begin
                         we        <= 1'b0;

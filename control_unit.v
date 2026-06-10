@@ -63,7 +63,7 @@ module control_unit (
             src2      <= 4'd0;
             immediate <= 16'd0;
             we        <= 1'b0;
-            clear_reg <= 1'b0;
+            clear_reg <= 1'b1;
             lcd_start <= 1'b0;
         end else begin
             // Avança para o próximo estado
@@ -75,7 +75,7 @@ module control_unit (
                 
                 case (instruction[17:15])
                     3'b000: begin // LOAD
-                        dst  <= instruction[10:7]; // CORREÇÃO: Conforme especificação [10:7] é o Dest do LOAD
+                        dst  <= instruction[14:11]; // CORREÇÃO: Conforme especificação [14:11] é o Dest do LOAD
                         src1 <= 4'd0;
                         src2 <= 4'd0;
                         if (instruction[6]) 

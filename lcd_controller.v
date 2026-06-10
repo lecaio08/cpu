@@ -104,6 +104,9 @@ module lcd_controller(
     // Registos internos para congelar os valores da CPU
     reg [2:0] opcode_reg;
     reg [3:0] dst_reg_internal;
+    
+    // Flag interna para sabermos se o comando capturado veio do reset inicial
+    reg is_boot_reset;
 
     // Divisor de clock interno para o LCD (50MHz -> ~1ms)
     reg [15:0] clk_div;
@@ -117,8 +120,18 @@ module lcd_controller(
             index <= 0;
             clk_div <= 0;
             lcd_e_reg <= 0;
-            opcode_reg <= 0;
+            opcode_reg <= 3'b110; // Começa apontando para uma inicialização segura
             dst_reg_internal <= 0;
+            is_boot_reset <= 1'b1; // Ativa flag de boot inicial sob reset físico
+            
+            // Força memórias de linha a começarem com o padrão exigido
+            line1[0]<="-"; line1[1]<="-"; line1[2]<="-"; line1[3]<="-";
+            line1[4]<=" "; line1[5]<=" "; line1[6]<=" "; line1[7]<=" "; line1[8]<=" "; line1[9]<=" ";
+            line1[10]<="["; line1[11]<="-"; line1[12]<="-"; line1[13]<="-"; line1[14]<="-"; line1[15]<="]";
+            
+            line2[0]<=" "; line2[1]<=" "; line2[2]<=" "; line2[3]<=" "; line2[4]<=" ";
+            line2[5]<=" "; line2[6]<=" "; line2[7]<=" "; line2[8]<=" "; line2[9]<=" ";
+            line2[11]<="0"; line2[12]<="0"; line2[13]<="0"; line2[14]<="0"; line2[15]<="0";
         end else begin
             // Contador do divisor de clock
             if (clk_div >= 16'd50000)
@@ -127,14 +140,21 @@ module lcd_controller(
                 clk_div <= clk_div + 1;
 
             case(state)
-S_IDLE: begin
+                S_IDLE: begin
                     lcd_e_reg <= 0;
-                    if(init_done && start_write) begin
-                        // Captura e congela os sinais vindos da CPU para evitar flutuações de switches
-                        opcode_reg <= opcode;
+                    
+                    // Se o sistema acabou de ligar, pula o start_write da CPU e força a primeira renderização
+                    if(init_done && is_boot_reset) begin
+                        opcode_reg    <= 3'b110;
+                        state         <= S_SETUP1;
+                    end
+                    // Caso contrário, segue o fluxo normal ativado pela CPU
+                    else if(init_done && start_write) begin
+                        opcode_reg       <= opcode;
                         dst_reg_internal <= dst_reg;
+                        is_boot_reset    <= 1'b0; // Certifica-se de desligar o modo boot
 
-                        // Limpa as memórias do display com espaços vazios
+                        // Limpa as memórias do display com espaços vazios antes de mapear nova instrução
                         for(i=0; i<16; i=i+1) begin
                             line1[i] <= " ";
                             line2[i] <= " ";
@@ -145,38 +165,51 @@ S_IDLE: begin
                 end
 
                 S_SETUP1: begin
-                    // 1. Monta rigidamente a escrita das operações (3 ou 4 letras)
-                    case(opcode_reg)
-                        3'b000: begin line1[0]<="L"; line1[1]<="O"; line1[2]<="A"; line1[3]<="D"; end // LOAD 
-                        3'b001: begin line1[0]<="A"; line1[1]<="D"; line1[2]<="D"; end                 // ADD 
-                        3'b010: begin line1[0]<="A"; line1[1]<="D"; line1[2]<="D"; line1[3]<="I"; end // ADDI 
-                        3'b011: begin line1[0]<="S"; line1[1]<="U"; line1[2]<="B"; end                 // SUB 
-                        3'b100: begin line1[0]<="S"; line1[1]<="B"; line1[2]<="I"; end                 // SUBI 
-                        3'b101: begin line1[0]<="M"; line1[1]<="U"; line1[2]<="L"; end                 // MUL 
-                        3'b110: begin line1[0]<="C"; line1[1]<="L"; line1[2]<="R"; end                 // CLEAR 
-                        3'b111: begin line1[0]<="D"; line1[1]<="P"; line1[2]<="L"; end                 // DISPLAY -> DPL 
-                        default: begin line1[0]<=" "; line1[1]<=" "; line1[2]<=" "; end
-                    endcase
+                    // INTERCEPÇÃO DE INICIALIZAÇÃO / RESET: 
+                    // Se estivermos em Boot ou o Opcode recebido for o CLEAR estrito da inicialização
+                    if (is_boot_reset || (opcode_reg == 3'b110 && start_write == 1'b0)) begin
+                        // 1. Canto superior esquerdo: ----
+                        line1[0] <= "-"; line1[1] <= "-"; line1[2] <= "-"; line1[3] <= "-";
+                        
+                        // 2. Canto superior direito: [----]
+                        line1[10] <= "["; line1[11] <= "-"; line1[12] <= "-"; line1[13] <= "-"; line1[14] <= "-"; line1[15] <= "]";
+                        
+                        // 3. Canto inferior direito: 00000
+                        line2[11] <= "0"; line2[12] <= "0"; line2[13] <= "0"; line2[14] <= "0"; line2[15] <= "0";
+                    end 
+                    // CÓDIGO ORIGINAL: Executado se for uma operação normal de instrução
+                    else begin
+                        case(opcode_reg)
+                            3'b000: begin line1[0]<="L"; line1[1]<="O"; line1[2]<="A"; line1[3]<="D"; end // LOAD 
+                            3'b001: begin line1[0]<="A"; line1[1]<="D"; line1[2]<="D"; end                 // ADD 
+                            3'b010: begin line1[0]<="A"; line1[1]<="D"; line1[2]<="D"; line1[3]<="I"; end // ADDI 
+                            3'b011: begin line1[0]<="S"; line1[1]<="U"; line1[2]<="B"; end                 // SUB 
+                            3'b100: begin line1[0]<="S"; line1[1]<="B"; line1[2]<="I"; end                 // SUBI 
+                            3'b101: begin line1[0]<="M"; line1[1]<="U"; line1[2]<="L"; end                 // MUL 
+                            3'b110: begin line1[0]<="C"; line1[1]<="L"; line1[2]<="R"; end                 // CLEAR 
+                            3'b111: begin line1[0]<="D"; line1[1]<="P"; line1[2]<="L"; end                 // DISPLAY -> DPL 
+                            default: begin line1[0]<=" "; line1[1]<=" "; line1[2]<=" "; end
+                        endcase
 
-                    // 2. Formata o registrador e os números rigidamente empurrados para as últimas colunas (10 a 15)
-                    if (opcode_reg != 3'b110) begin // Se não for CLEAR [cite: 130]
-                        line1[10] <= "[";
-                        line1[11] <= dst_reg_internal[3] ? "1" : "0"; 
-                        line1[12] <= dst_reg_internal[2] ? "1" : "0"; 
-                        line1[13] <= dst_reg_internal[1] ? "1" : "0"; 
-                        line1[14] <= dst_reg_internal[0] ? "1" : "0"; 
-                        line1[15] <= "]";
+                        // Formata o registrador e os números rigidamente empurrados para as últimas colunas (10 a 15)
+                        if (opcode_reg != 3'b110) begin
+                            line1[10] <= "[";
+                            line1[11] <= dst_reg_internal[3] ? "1" : "0"; 
+                            line1[12] <= dst_reg_internal[2] ? "1" : "0"; 
+                            line1[13] <= dst_reg_internal[1] ? "1" : "0"; 
+                            line1[14] <= dst_reg_internal[0] ? "1" : "0"; 
+                            line1[15] <= "]";
 
-                        line2[10] <= sign ? "-" : "+";
-                        line2[11] <= d4 + 8'd48;
-                        line2[12] <= d3 + 8'd48;
-                        line2[13] <= d2 + 8'd48;
-                        line2[14] <= d1 + 8'd48;
-                        line2[15] <= d0 + 8'd48;
+                            line2[10] <= sign ? "-" : "+";
+                            line2[11] <= d4 + 8'd48;
+                            line2[12] <= d3 + 8'd48;
+                            line2[13] <= d2 + 8'd48;
+                            line2[14] <= d1 + 8'd48;
+                            line2[15] <= d0 + 8'd48;
+                        end
                     end
 
                     index <= 0;
-                    // IMPORTANTE: Damos um pequeno atraso de ticks para a FPGA estabilizar os caracteres nas ram's do LCD
                     state <= S_LINE1;
                 end
 
@@ -194,6 +227,7 @@ S_IDLE: begin
                         end
                     end
                 end
+                
                 S_WRITE1: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin
@@ -204,7 +238,6 @@ S_IDLE: begin
                                 index <= index + 1;
                             end
                         end else begin
-                            // Primeiro coloca o Dado no barramento, e só depois liga o Enable
                             lcd_rs_reg <= 1; 
                             lcd_rw_reg <= 0;
                             lcd_data_reg <= line1[index];
@@ -212,7 +245,8 @@ S_IDLE: begin
                         end
                     end
                 end
-                    S_LINE2: begin
+                
+                S_LINE2: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin
                             lcd_e_reg <= 0;    // Desliga o pulso do comando
@@ -226,6 +260,7 @@ S_IDLE: begin
                         end
                     end
                 end
+                
                 S_WRITE2: begin
                     if (lcd_clk_tick) begin
                         if (lcd_e_reg == 1'b1) begin
@@ -236,7 +271,6 @@ S_IDLE: begin
                                 index <= index + 1;
                             end
                         end else begin
-                            // Primeiro coloca o Dado no barramento, e só depois liga o Enable
                             lcd_rs_reg <= 1;
                             lcd_rw_reg <= 0;
                             lcd_data_reg <= line2[index];
@@ -246,6 +280,7 @@ S_IDLE: begin
                 end
 
                 S_DONE: begin
+                    is_boot_reset <= 1'b0; // Garante que saiu do modo boot após a primeira varredura completa
                     state <= S_IDLE; 
                 end
 

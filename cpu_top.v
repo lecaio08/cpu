@@ -51,9 +51,8 @@ module cpu_top(
         .rst(~KEY0),
         .instructionPulse(instructionPulse),
 
-        .instruction(SW), // Mantido o teu nome original "instruction"
-
         .opcode(opcode),
+		  .instruction(SW),
 
         .src1(src1),
         .src2(src2),
@@ -80,8 +79,7 @@ module cpu_top(
         .we(we),
 
         .clk(clk),
-        .rst(~KEY0),
-        .clear_reg(clear_reg), // Nova ligação para o CLEAR
+        .rst(clear_reg),
 
         .rdata1(reg_a),
         .rdata2(reg_b)
@@ -96,7 +94,7 @@ module cpu_top(
 
         .opA(reg_a),
         .opB(reg_b),
-        .immediate(immediate), // Nova ligação para o valor imediato
+        .imm_ext(immediate), // Nova ligação para o valor imediato
 
         .result(alu_result)
 

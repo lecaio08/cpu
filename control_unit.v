@@ -2,7 +2,7 @@ module control_unit (
     input clk,
     input rst,                     // Reset global (~KEY0)
     input instructionPulse,        // Pulso do botão Enviar (vindo do debounce)
-    input [17:0] sw,               // Switches da placa
+    input [17:0] instruction,      // Nome alterado de 'sw' para 'instruction' para casar com o cpu_top
 
     output reg [2:0] opcode,       // Código da instrução
     output reg [3:0] dst,          // Registrador de Destino
@@ -69,38 +69,62 @@ module control_unit (
             // Avança para o próximo estado
             state <= next_state;
 
-            // Decodificação da instrução: feita APENAS quando o botão é apertado
+            // Decodificação da instrução: feita APENAS no momento do disparo em S_IDLE
             if (state == S_IDLE && instructionPulse) begin
-                opcode <= sw[17:15]; // Isola o Opcode unificado
+                opcode <= instruction[17:15]; // Isola o Opcode unificado
                 
-                case (sw[17:15])
+                case (instruction[17:15])
                     3'b000: begin // LOAD
-                        dst <= sw[14:11];
-                        if (sw[6]) immediate <= - $signed({10'd0, sw[5:0]});
-                        else       immediate <= $signed({10'd0, sw[5:0]});
+                        dst  <= instruction[10:7]; // CORREÇÃO: Conforme especificação [10:7] é o Dest do LOAD
+                        src1 <= 4'd0;
+                        src2 <= 4'd0;
+                        if (instruction[6]) 
+                            immediate <= - $signed({10'd0, instruction[5:0]});
+                        else       
+                            immediate <= $signed({10'd0, instruction[5:0]});
                     end
+                    
                     3'b001, 3'b011: begin // ADD, SUB
-                        dst  <= sw[14:11];
-                        src1 <= sw[10:7];
-                        src2 <= sw[6:3];
+                        dst       <= instruction[14:11];
+                        src1      <= instruction[10:7];
+                        src2      <= instruction[6:3];
+                        immediate <= 16'd0; // Sem imediato
                     end
+                    
                     3'b010, 3'b100, 3'b101: begin // ADDI, SUBI, MUL
-                        dst  <= sw[14:11];
-                        src1 <= sw[10:7];
-                        if (sw[6]) immediate <= - $signed({10'd0, sw[5:0]});
-                        else       immediate <= $signed({10'd0, sw[5:0]});
+                        dst  <= instruction[14:11];
+                        src1 <= instruction[10:7];
+                        src2 <= 4'd0; // Sem segundo registrador fonte
+                        if (instruction[6]) 
+                            immediate <= - $signed({10'd0, instruction[5:0]});
+                        else       
+                            immediate <= $signed({10'd0, instruction[5:0]});
                     end
+                    
                     3'b111: begin // DISPLAY
-                        src1 <= sw[14:11];
-                        dst  <= sw[14:11];
+                        src1      <= instruction[14:11];
+                        dst       <= instruction[14:11]; // Mantido para o LCD capturar corretamente
+                        src2      <= 4'd0;
+                        immediate <= 16'd0;
                     end
+                    
+                    3'b110: begin // CLEAR
+                        dst       <= 4'd0;
+                        src1      <= 4'd0;
+                        src2      <= 4'd0;
+                        immediate <= 16'd0;
+                    end
+                    
                     default: begin
-                        // CLEAR (110) não precisa mapear registradores
+                        dst       <= 4'd0;
+                        src1      <= 4'd0;
+                        src2      <= 4'd0;
+                        immediate <= 16'd0;
                     end
                 endcase
             end
 
-            // Atualização Síncrona das Saídas (we, clear_reg, lcd_start) de acordo com o Estado
+            // Atualização Síncrona das Saídas de acordo com o Estado Atual da FSM
             case (state)
                 S_IDLE: begin
                     we        <= 1'b0;
@@ -109,21 +133,27 @@ module control_unit (
                 end
 
                 S_EXECUTE: begin
-                    // Apenas aguarda os elétrons passarem pela ULA
+                    // Aguarda estabilização do cálculo combinacional da ULA
                 end
 
                 S_WRITE: begin
                     if (opcode == 3'b110) begin
                         clear_reg <= 1'b1; // Envia o pulso de CLEAR para a memória
                     end else if (opcode != 3'b111) begin
-                        we <= 1'b1;        // Ativa escrita (se não for DISPLAY nem CLEAR)
+                        we <= 1'b1;        // Ativa escrita na memória RAM (se não for DISPLAY nem CLEAR)
                     end
                 end
 
                 S_UPDATE: begin
-                    we        <= 1'b0; // Desliga a escrita
+                    we        <= 1'b0; // Desliga a escrita antes de mudar de estado
                     clear_reg <= 1'b0; // Desliga o clear
-                    lcd_start <= 1'b1; // Dispara a atualização do LCD
+                    lcd_start <= 1'b1; // Dispara a atualização do LCD controller
+                end
+                
+                default: begin
+                    we        <= 1'b0;
+                    clear_reg <= 1'b0;
+                    lcd_start <= 1'b0;
                 end
             endcase
         end

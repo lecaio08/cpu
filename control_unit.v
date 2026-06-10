@@ -1,6 +1,6 @@
 module control_unit (
     input clk,
-    input rst,                     // Reset global (~KEY0)
+    input rst,                     // Reset global (Certifique-se de que é ativo em ALTO se usar posedge)
     input instructionPulse,        // Pulso do botão Enviar (vindo do debounce)
     input [17:0] sw,               // Switches da placa
 
@@ -69,38 +69,47 @@ module control_unit (
             // Avança para o próximo estado
             state <= next_state;
 
-            // Decodificação da instrução: feita APENAS quando o botão é apertado
+            // Decodificação da instrução: feita apenas quando o pulso ocorre em S_IDLE
             if (state == S_IDLE && instructionPulse) begin
-                opcode <= sw[17:15]; // Isola o Opcode unificado
+                opcode <= sw[17:15]; // Isola o Opcode unificado 
                 
                 case (sw[17:15])
-                    3'b000: begin // LOAD
-                        dst <= sw[14:11];
-                        if (sw[6]) immediate <= - $signed({10'd0, sw[5:0]});
-                        else       immediate <= $signed({10'd0, sw[5:0]});
+                    3'b000: begin // LOAD [cite: 94]
+                        dst       <= sw[14:11];
+                        src1      <= 4'd0;
+                        src2      <= 4'd0;
+                        // Correção da extensão de sinal (Sign-Magnitude para Complemento de 2)
+                        immediate <= sw[6] ? -sw[5:0] : sw[5:0]; 
                     end
-                    3'b001, 3'b011: begin // ADD, SUB
-                        dst  <= sw[14:11];
-                        src1 <= sw[10:7];
-                        src2 <= sw[6:3];
+                    3'b001, 3'b011: begin // ADD, SUB [cite: 94]
+                        dst       <= sw[14:11];
+                        src1      <= sw[10:7];
+                        src2      <= sw[6:3];
+                        immediate <= 16'd0;
                     end
-                    3'b010, 3'b100, 3'b101: begin // ADDI, SUBI, MUL
-                        dst  <= sw[14:11];
-                        src1 <= sw[10:7];
-                        if (sw[6]) immediate <= - $signed({10'd0, sw[5:0]});
-                        else       immediate <= $signed({10'd0, sw[5:0]});
+                    3'b010, 3'b100, 3'b101: begin // ADDI, SUBI, MUL [cite: 94]
+                        dst       <= sw[14:11];
+                        src1      <= sw[10:7];
+                        src2      <= 4'd0;
+                        // Correção da extensão de sinal
+                        immediate <= sw[6] ? -sw[5:0] : sw[5:0]; 
                     end
-                    3'b111: begin // DISPLAY
-                        src1 <= sw[14:11];
-                        dst  <= sw[14:11];
+                    3'b111: begin // DISPLAY [cite: 94]
+                        src1      <= sw[14:11];
+                        dst       <= sw[14:11];
+                        src2      <= 4'd0;
+                        immediate <= 16'd0;
                     end
-                    default: begin
-                        // CLEAR (110) não precisa mapear registradores
+                    default: begin // CLEAR (110) ou opcodes inválidos [cite: 94]
+                        dst       <= 4'd0;
+                        src1      <= 4'd0;
+                        src2      <= 4'd0;
+                        immediate <= 16'd0;
                     end
                 endcase
             end
 
-            // Atualização Síncrona das Saídas (we, clear_reg, lcd_start) de acordo com o Estado
+            // Atualização Síncrona Segura de todas as saídas em todos os estados
             case (state)
                 S_IDLE: begin
                     we        <= 1'b0;
@@ -109,21 +118,35 @@ module control_unit (
                 end
 
                 S_EXECUTE: begin
-                    // Apenas aguarda os elétrons passarem pela ULA
+                    we        <= 1'b0;
+                    clear_reg <= 1'b0;
+                    lcd_start <= 1'b0;
                 end
 
                 S_WRITE: begin
-                    if (opcode == 3'b110) begin
-                        clear_reg <= 1'b1; // Envia o pulso de CLEAR para a memória
-                    end else if (opcode != 3'b111) begin
-                        we <= 1'b1;        // Ativa escrita (se não for DISPLAY nem CLEAR)
+                    lcd_start <= 1'b0;
+                    if (opcode == 3'b110) begin // CLEAR [cite: 94]
+                        clear_reg <= 1'b1; 
+                        we        <= 1'b0;
+                    end else if (opcode != 3'b111) begin // Escreve se não for DISPLAY nem CLEAR [cite: 94]
+                        we        <= 1'b1;        
+                        clear_reg <= 1'b0;
+                    end else begin // DISPLAY não escreve na memória [cite: 129]
+                        we        <= 1'b0;
+                        clear_reg <= 1'b0;
                     end
                 end
 
                 S_UPDATE: begin
-                    we        <= 1'b0; // Desliga a escrita
-                    clear_reg <= 1'b0; // Desliga o clear
-                    lcd_start <= 1'b1; // Dispara a atualização do LCD
+                    we        <= 1'b0; 
+                    clear_reg <= 1'b0; 
+                    lcd_start <= 1'b1; // Dispara a atualização do LCD após estabilizar a memória
+                end
+                
+                default: begin
+                    we        <= 1'b0;
+                    clear_reg <= 1'b0;
+                    lcd_start <= 1'b0;
                 end
             endcase
         end

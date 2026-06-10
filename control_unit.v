@@ -30,7 +30,7 @@ module control_unit (
     always @(*) begin
         case (state)
             S_INIT: begin
-                // Executa uma única vez no boot/reset e vai direto para a espera estável
+                // Executa uma única vez no boot/reset e vai direto para a espera estável (S_IDLE)
                 next_state = S_IDLE;
             end
 
@@ -78,7 +78,7 @@ module control_unit (
         end else begin
             state <= next_state;
 
-            // Tratamento do estado de inicialização pós-reset lógico
+            // Tratamento das saídas estritamente no estado de inicialização pós-reset lógico
             if (state == S_INIT) begin
                 we        <= 1'b0;
                 clear_reg <= 1'b1; // Mantém a memória limpando

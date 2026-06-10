@@ -24,7 +24,7 @@ module control_unit (
     reg [1:0] next_state;
 
     // -------------------------------------------------------------------------
-    // PARTE COMBINACIONAL: Lógica para alteração de estados
+    // PARTE COMBINACIONAL: Lógica estável para alteração de estados
     // -------------------------------------------------------------------------
     always @(*) begin
         case (state)
@@ -44,7 +44,11 @@ module control_unit (
             end
             
             S_UPDATE: begin
-                next_state = S_IDLE;
+                // Siga para IDLE e espere o pulso do botão apagar completamente
+                if (instructionPulse)
+                    next_state = S_UPDATE; // Trava aqui caso o pulso do botão seja longo
+                else
+                    next_state = S_IDLE;
             end
             
             default: next_state = S_IDLE;
@@ -52,7 +56,7 @@ module control_unit (
     end
 
     // -------------------------------------------------------------------------
-    // PARTE SEQUENCIAL: Atualização de estados e decodificação das instruções
+    // PARTE SEQUENCIAL: Atualização de estados e decodificação precisa
     // -------------------------------------------------------------------------
     always @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -62,12 +66,16 @@ module control_unit (
             src1      <= 4'd0;
             src2      <= 4'd0;
             immediate <= 16'd0;
+            we        <= 1'b0;
+            clear_reg <= 1'b1; // Memória limpa puramente sob a ativação do reset
+            lcd_start <= 1'b0;
         end else begin
             state <= next_state;
 
-            // Decodificação: feita estritamente no momento do pulso em S_IDLE
+            // Decodificação: feita estritamente na transição exata do disparo
             if (state == S_IDLE && instructionPulse) begin
                 opcode <= instruction[17:15];
+                clear_reg <= 1'b0; // Garante desligamento total antes de operar
                 
                 case (instruction[17:15])
                     3'b000: begin // LOAD
@@ -118,139 +126,36 @@ module control_unit (
                         immediate <= 16'd0;
                     end
                 endcase
-            end
-        end
-    end
-
-    // -------------------------------------------------------------------------
-    // CORREÇÃO CRUCIAL: Atribuição Combinacional das Saídas de Controle
-    // Isso impede que os sinais atrasem 1 ciclo e executem ações duplicadas.
-    // -------------------------------------------------------------------------
-    always @(*) begin
-        // Valores padrão (Default) para evitar travas (latches)
-        we        = 1'b0;
-        clear_reg = 1'b0;
-        lcd_start = 1'b0;
-
-        // Se o sistema estiver em RESET físico, força o clear_reg ativo de forma pura
-        if (rst) begin
-            clear_reg = 1'b1;
-        end else begin
-            case (state)
-                S_IDLE: begin
-                    // Saídas em repouso
-                end
-
-                S_EXECUTE: begin
-                    // Aguarda estabilização da ULA
-                end
-
-                S_WRITE: begin
-                    if (opcode == 3'b110) begin
-                        clear_reg = 1'b1; // Pulso limpo de CLEAR apenas neste estado
-                    end else if (opcode != 3'b111) begin
-                        we = 1'b1;        // Escrita ativa estritamente dentro do estado S_WRITE
+            end else begin
+                // Atualização Controlada das Saídas nos estados correspondentes
+                case (next_state)
+                    S_IDLE: begin
+                        we        <= 1'b0;
+                        clear_reg <= 1'b0;
+                        lcd_start <= 1'b0;
                     end
-                end
 
-                S_UPDATE: begin
-                    lcd_start = 1'b1;    // Ativa o LCD exatamente no tempo de S_UPDATE
-                end
-            endcase
-        end
-    end
+                    S_EXECUTE: begin
+                        we        <= 1'b0;
+                        clear_reg <= 1'b0;
+                        lcd_start <= 1'b0;
+                    end
 
-endmodule        end else begin
-            // Avança para o próximo estado
-            state <= next_state;
+                    S_WRITE: begin
+                        if (opcode == 3'b110) begin
+                            clear_reg <= 1'b1; // Ativa CLEAR apenas se a instrução atual for CLEAR
+                        end else if (opcode != 3'b111) begin
+                            we <= 1'b1;        // Ativa escrita na RAM
+                        end
+                    end
 
-            // Decodificação da instrução: feita APENAS no momento do disparo em S_IDLE
-            if (state == S_IDLE && instructionPulse) begin
-                opcode <= instruction[17:15]; // Isola o Opcode unificado
-                
-                case (instruction[17:15])
-                    3'b000: begin // LOAD
-                        dst  <= instruction[14:11]; // CORREÇÃO: Conforme especificação [14:11] é o Dest do LOAD
-                        src1 <= 4'd0;
-                        src2 <= 4'd0;
-                        if (instruction[6]) 
-                            immediate <= - $signed({10'd0, instruction[5:0]});
-                        else       
-                            immediate <= $signed({10'd0, instruction[5:0]});
-                    end
-                    
-                    3'b001, 3'b011: begin // ADD, SUB
-                        dst       <= instruction[14:11];
-                        src1      <= instruction[10:7];
-                        src2      <= instruction[6:3];
-                        immediate <= 16'd0; // Sem imediato
-                    end
-                    
-                    3'b010, 3'b100, 3'b101: begin // ADDI, SUBI, MUL
-                        dst  <= instruction[14:11];
-                        src1 <= instruction[10:7];
-                        src2 <= 4'd0; // Sem segundo registrador fonte
-                        if (instruction[6]) 
-                            immediate <= - $signed({10'd0, instruction[5:0]});
-                        else       
-                            immediate <= $signed({10'd0, instruction[5:0]});
-                    end
-                    
-                    3'b111: begin // DISPLAY
-                        src1      <= instruction[14:11];
-                        dst       <= instruction[14:11]; // Mantido para o LCD capturar corretamente
-                        src2      <= 4'd0;
-                        immediate <= 16'd0;
-                    end
-                    
-                    3'b110: begin // CLEAR
-                        dst       <= 4'd0;
-                        src1      <= 4'd0;
-                        src2      <= 4'd0;
-                        immediate <= 16'd0;
-                    end
-                    
-                    default: begin
-                        dst       <= 4'd0;
-                        src1      <= 4'd0;
-                        src2      <= 4'd0;
-                        immediate <= 16'd0;
+                    S_UPDATE: begin
+                        we        <= 1'b0;     // Corta a escrita imediatamente
+                        clear_reg <= 1'b0;
+                        lcd_start <= 1'b1;     // Dispara o LCD com segurança
                     end
                 endcase
             end
-
-            // Atualização Síncrona das Saídas de acordo com o Estado Atual da FSM
-            case (state)
-                S_IDLE: begin
-                    we        <= 1'b0;
-                    clear_reg <= 1'b0;
-                    lcd_start <= 1'b0;
-                end
-
-                S_EXECUTE: begin
-                    // Aguarda estabilização do cálculo combinacional da ULA
-                end
-
-                S_WRITE: begin
-                    if (opcode == 3'b110) begin
-                        clear_reg <= 1'b1; // Envia o pulso de CLEAR para a memória
-                    end else if (opcode != 3'b111) begin
-                        we <= 1'b1;        // Ativa escrita na memória RAM (se não for DISPLAY nem CLEAR)
-                    end
-                end
-
-                S_UPDATE: begin
-                    we        <= 1'b0; // Desliga a escrita antes de mudar de estado
-                    clear_reg <= 1'b0; // Desliga o clear
-                    lcd_start <= 1'b1; // Dispara a atualização do LCD controller
-                end
-                
-                default: begin
-                    we        <= 1'b0;
-                    clear_reg <= 1'b0;
-                    lcd_start <= 1'b0;
-                end
-            endcase
         end
     end
 endmodule

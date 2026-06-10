@@ -3,7 +3,6 @@ module module_alu (
     input signed [15:0] opA,
     input signed [15:0] opB,
     input signed [15:0] imm_ext, // Entrada do imediato vindo da CU
-    input use_imm,               // Flag se deve usar o imediato
     output reg signed [15:0] result
 );
     // opcodes de acordo com as especificações
@@ -23,7 +22,7 @@ always @(*) begin
             3'b010:  result = opA + imm_ext; // Usa o Imediato
             3'b011:  result = opA - opB;
             3'b100:  result = opA - imm_ext; // Usa o Imediato
-            3'b101:  result = opA * opB;
+            3'b101:  result = opA * imm_ext; //Usa o imediato
             3'b110:  result = 16'd0; 
             3'b111:  result = opA;
             default: result = 16'd0;

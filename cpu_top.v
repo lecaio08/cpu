@@ -63,8 +63,7 @@ module cpu_top(
         .clear_reg(clear_reg),
         .lcd_start(lcd_start)
 
-    );
-
+     );																		
     // MEMORY
 
     memory MEM(

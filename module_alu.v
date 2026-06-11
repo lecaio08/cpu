@@ -5,7 +5,6 @@ module module_alu (
     input signed [15:0] imm_ext, // Entrada do imediato vindo da CU
     output reg signed [15:0] result
 );
-    // opcodes de acordo com as especificações
     parameter LOAD    = 3'b000; // LOAD x1, a
     parameter ADD     = 3'b001; // ADD  x3, x1, x2
     parameter ADDI    = 3'b010; // ADDI x2, x1, 10
@@ -14,6 +13,7 @@ module module_alu (
     parameter MUL     = 3'b101; // MUL  x3, x1, x2
     parameter CLEAR   = 3'b110; // zera os registradores
     parameter DISPLAY = 3'b111; // DISPLAY x0
+    
     // parte combinacional: definição dos outputs de acordo com a instrução
 always @(*) begin
         case (opcode)
